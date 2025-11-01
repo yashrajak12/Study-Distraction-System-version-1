@@ -1,0 +1,11 @@
+services:
+  sds-study-tracker:
+    build: .
+    ports:
+      - "5000:5000"
+    devices:
+      - "/dev/video0:/dev/video0"   # 👈 Allow access to host camera
+    environment:
+      - DISPLAY=$DISPLAY
+    volumes:
+      - .:/app

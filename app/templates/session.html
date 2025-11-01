@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Study Tracker Session</title>
+    <style>
+        body { background: #111; color: white; text-align: center; font-family: Arial; }
+        video { border: 3px solid #0f0; border-radius: 10px; margin-top: 20px; width: 70%; max-width: 600px; }
+        canvas { display: none; }
+        #stats { margin-top: 20px; font-size: 18px; color: #0ff; }
+    </style>
+</head>
+<body>
+    <h1>📚 Study Tracker (Cloud Version)</h1>
+    <video id="camera" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div id="stats">Camera active... tracking...</div>
+
+    <script>
+        const video = document.getElementById('camera');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Ask permission and start camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                console.log("Camera started successfully!");
+            } catch (err) {
+                document.getElementById('stats').innerText = "❌ Camera not accessible!";
+                console.error("Camera error:", err);
+            }
+        }
+        startCamera();
+
+        // (Optional) Send frame to Flask for processing every few seconds
+        setInterval(() => {
+            const w = video.videoWidth;
+            const h = video.videoHeight;
+            if (w && h) {
+                canvas.width = w;
+                canvas.height = h;
+                ctx.drawImage(video, 0, 0, w, h);
+                canvas.toBlob(blob => {
+                    const formData = new FormData();
+                    formData.append("frame", blob, "frame.jpg");
+                    fetch("/process_frame", { method: "POST", body: formData });
+                }, "image/jpeg", 0.8);
+            }
+        }, 2000); // every 2 seconds
+    </script>
+</body>
+</html>
