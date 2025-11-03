@@ -3,6 +3,7 @@ import mediapipe as mp
 import numpy as np
 import time
 
+
 class StudyTracker:
     def __init__(self):
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
@@ -38,7 +39,15 @@ class StudyTracker:
         # Thresholds (in pixels)
         self.pupil_move_threshold = 4  # Lower = more sensitive
         self.head_move_threshold = 15  # Lower = more sensitive
-        self.blink_threshold = 0.20
+
+        # ✅ FIXED: Better blink detection thresholds
+        self.blink_threshold = 0.25  # Increased from 0.20
+        self.blink_consecutive_frames = 2  # Must be closed for 2 frames
+        self.blink_cooldown = 0.2  # Minimum 0.2s between blinks
+
+        # ✅ NEW: Blink state tracking
+        self.eyes_closed_frames = 0
+        self.was_eyes_open = True
 
         # Gesture detection
         self.gesture_start_time = None
@@ -48,31 +57,70 @@ class StudyTracker:
         self.summary_shown = False
         self.end_time = None
 
-    #     Done Till now
-
     def _get_pupil_position(self, landmarks, eye_indices, w, h):
         """Get pupil center from iris landmarks (more accurate than eye average)."""
-        # MediaPipe provides iris landmarks for better pupil tracking
-        # Left iris: 468, 469, 470, 471, 472
-        # Right iris: 473, 474, 475, 476, 477
-
-        # Calculate center of eye region
         eye_points = [(landmarks[i].x * w, landmarks[i].y * h) for i in eye_indices]
         center = np.mean(eye_points, axis=0)
         return center
 
     def _eye_aspect_ratio(self, landmarks, eye_indices, w, h):
-        """Calculate Eye Aspect Ratio for blink detection."""
-        # Get vertical eye landmarks
-        top = np.mean([(landmarks[i].x * w, landmarks[i].y * h) for i in eye_indices[:3]], axis=0)
-        bottom = np.mean([(landmarks[i].x * w, landmarks[i].y * h) for i in eye_indices[3:]], axis=0)
-        left = (landmarks[eye_indices[6]].x * w, landmarks[eye_indices[6]].y * h)
-        right = (landmarks[eye_indices[7]].x * w, landmarks[eye_indices[7]].y * h)
+        """Calculate Eye Aspect Ratio for blink detection - IMPROVED VERSION."""
+        # ✅ FIXED: Using proper vertical landmarks for better detection
+        # Top eyelid points
+        p1 = np.array([landmarks[eye_indices[1]].x * w, landmarks[eye_indices[1]].y * h])
+        p2 = np.array([landmarks[eye_indices[2]].x * w, landmarks[eye_indices[2]].y * h])
 
-        vert = np.linalg.norm(np.array(top) - np.array(bottom))
-        hori = np.linalg.norm(np.array(left) - np.array(right))
+        # Bottom eyelid points  
+        p4 = np.array([landmarks[eye_indices[4]].x * w, landmarks[eye_indices[4]].y * h])
+        p5 = np.array([landmarks[eye_indices[5]].x * w, landmarks[eye_indices[5]].y * h])
 
-        return vert / hori if hori > 0 else 0
+        # Horizontal points (corner to corner)
+        p0 = np.array([landmarks[eye_indices[0]].x * w, landmarks[eye_indices[0]].y * h])
+        p3 = np.array([landmarks[eye_indices[3]].x * w, landmarks[eye_indices[3]].y * h])
+
+        # Calculate distances
+        vertical1 = np.linalg.norm(p1 - p5)
+        vertical2 = np.linalg.norm(p2 - p4)
+        horizontal = np.linalg.norm(p0 - p3)
+
+        # Average vertical distance
+        vertical_avg = (vertical1 + vertical2) / 2.0
+
+        # EAR formula
+        ear = vertical_avg / horizontal if horizontal > 0 else 0
+
+        return ear
+
+    def _detect_blink(self, left_ear, right_ear):
+        """
+        ✅ IMPROVED: Better blink detection with state machine
+        Returns True if blink detected
+        """
+        avg_ear = (left_ear + right_ear) / 2.0
+        current_time = time.time()
+
+        # Check if eyes are currently closed
+        eyes_closed = avg_ear < self.blink_threshold
+
+        if eyes_closed:
+            self.eyes_closed_frames += 1
+        else:
+            # Eyes opened
+            if self.eyes_closed_frames >= self.blink_consecutive_frames:
+                # Valid blink detected (eyes were closed, now opened)
+                if not self.was_eyes_open and (current_time - self.last_blink_time) > self.blink_cooldown:
+                    self.last_blink_time = current_time
+                    self.eyes_closed_frames = 0
+                    self.was_eyes_open = True
+                    return True
+
+            self.eyes_closed_frames = 0
+            self.was_eyes_open = True
+
+        if eyes_closed:
+            self.was_eyes_open = False
+
+        return False
 
     def _count_extended_fingers(self, hand_landmarks):
         """Count how many fingers are extended."""
@@ -147,6 +195,11 @@ class StudyTracker:
                 self.prev_nose_tip = None
                 self.frame_count = 0
 
+                # ✅ Reset blink tracking
+                self.eyes_closed_frames = 0
+                self.was_eyes_open = True
+                self.last_blink_time = 0
+
                 print("✅ Session STARTED!")
                 self.gesture_start_time = None
 
@@ -219,20 +272,20 @@ class StudyTracker:
                 if face_res.multi_face_landmarks:
                     lm = face_res.multi_face_landmarks[0].landmark
 
-                    # Eye landmark indices
+                    # ✅ FIXED: Correct eye landmark indices for better tracking
+                    # Left eye: outer corner, top, inner corner, bottom
                     left_eye_indices = [33, 160, 158, 133, 153, 144, 173, 157]
                     right_eye_indices = [362, 385, 387, 263, 373, 380, 398, 384]
 
-                    # Get iris/pupil positions (MediaPipe iris landmarks)
+                    # Get iris/pupil positions
                     left_iris = [468, 469, 470, 471, 472]
                     right_iris = [473, 474, 475, 476, 477]
 
                     # Calculate pupil centers
-                    if len(lm) > max(left_iris + right_iris):  # Check if iris landmarks available
+                    if len(lm) > max(left_iris + right_iris):
                         left_pupil = np.mean([(lm[i].x * w, lm[i].y * h) for i in left_iris], axis=0)
                         right_pupil = np.mean([(lm[i].x * w, lm[i].y * h) for i in right_iris], axis=0)
                     else:
-                        # Fallback to eye center
                         left_pupil = self._get_pupil_position(lm, left_eye_indices, w, h)
                         right_pupil = self._get_pupil_position(lm, right_eye_indices, w, h)
 
@@ -241,7 +294,7 @@ class StudyTracker:
                         x, y = int(lm[idx].x * w), int(lm[idx].y * h)
                         cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
 
-                    # Draw pupil centers (RED - larger)
+                    # Draw pupil centers (RED)
                     cv2.circle(frame, (int(left_pupil[0]), int(left_pupil[1])), 5, (0, 0, 255), -1)
                     cv2.circle(frame, (int(right_pupil[0]), int(right_pupil[1])), 5, (0, 0, 255), -1)
 
@@ -249,7 +302,6 @@ class StudyTracker:
                     self.frame_count += 1
                     if self.frame_count % self.movement_check_interval == 0:
                         if self.prev_left_pupil is not None and self.prev_right_pupil is not None:
-                            # Calculate movement distance
                             left_dist = np.linalg.norm(np.array(left_pupil) - np.array(self.prev_left_pupil))
                             right_dist = np.linalg.norm(np.array(right_pupil) - np.array(self.prev_right_pupil))
                             avg_dist = (left_dist + right_dist) / 2
@@ -262,10 +314,7 @@ class StudyTracker:
                         self.prev_right_pupil = right_pupil.copy()
 
                     # ===== HEAD MOVEMENT DETECTION =====
-                    # Use nose tip for head movement
-                    nose_tip = np.array([lm[1].x * w, lm[1].y * h])  # Nose tip landmark
-
-                    # Draw nose tip (BLUE)
+                    nose_tip = np.array([lm[1].x * w, lm[1].y * h])
                     cv2.circle(frame, (int(nose_tip[0]), int(nose_tip[1])), 5, (255, 0, 0), -1)
 
                     if self.frame_count % self.movement_check_interval == 0:
@@ -278,15 +327,23 @@ class StudyTracker:
 
                         self.prev_nose_tip = nose_tip.copy()
 
-                    # ===== BLINK DETECTION =====
+                    # ===== BLINK DETECTION - IMPROVED =====
                     left_ear = self._eye_aspect_ratio(lm, left_eye_indices, w, h)
                     right_ear = self._eye_aspect_ratio(lm, right_eye_indices, w, h)
-                    avg_ear = (left_ear + right_ear) / 2
 
-                    if avg_ear < self.blink_threshold and time.time() - self.last_blink_time > 0.3:
+                    # ✅ NEW: Use improved blink detection
+                    if self._detect_blink(left_ear, right_ear):
                         self.blinks += 1
-                        self.last_blink_time = time.time()
-                        print(f"👁️ Blink detected! Count: {self.blinks}")
+                        print(f"👁️ BLINK DETECTED! Count: {self.blinks}")
+
+                        # ✅ Visual feedback for blink
+                        cv2.putText(frame, "BLINK!", (w // 2 - 50, 100),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 3)
+
+                    # ✅ Show current EAR value for debugging
+                    avg_ear = (left_ear + right_ear) / 2
+                    cv2.putText(frame, f"EAR: {avg_ear:.3f}", (10, h - 100),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
                 # Display stats
                 elapsed = int(time.time() - self.start_time)
