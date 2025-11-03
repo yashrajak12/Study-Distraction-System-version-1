@@ -3,51 +3,90 @@
 <head>
     <title>Study Tracker Session</title>
     <style>
-        body { background: #111; color: white; text-align: center; font-family: Arial; }
-        video { border: 3px solid #0f0; border-radius: 10px; margin-top: 20px; width: 70%; max-width: 600px; }
-        canvas { display: none; }
-        #stats { margin-top: 20px; font-size: 18px; color: #0ff; }
+        body {
+            background: #111;
+            color: white;
+            text-align: center;
+            font-family: Arial;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            margin-bottom: 20px;
+            color: #0ff;
+        }
+        .video-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+        }
+        img {
+            border: 3px solid #0f0;
+            border-radius: 10px;
+            max-width: 90%;
+            width: 800px;
+            height: auto;
+        }
+        #stats {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #0ff;
+        }
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px auto;
+            max-width: 600px;
+        }
+        .instruction-item {
+            margin: 10px 0;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
-    <h1>📚 Study Tracker (Cloud Version)</h1>
-    <video id="camera" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-    <div id="stats">Camera active... tracking...</div>
+    <h1>📚 Study Tracker Session</h1>
+
+    <div class="instructions">
+        <h3>How to Use:</h3>
+        <div class="instruction-item">✋ Show <strong>OPEN PALM</strong> (5 fingers) to START session</div>
+        <div class="instruction-item">✊ Show <strong>FIST</strong> (closed hand) to STOP session</div>
+        <div class="instruction-item">👀 Keep your face visible for tracking</div>
+    </div>
+
+    <div class="video-container">
+        <img id="videoFeed" src="{{ url_for('routes.video_feed') }}" alt="Video Feed">
+    </div>
+
+    <div id="stats">
+        <p>Camera is active... Face tracking is running...</p>
+        <p>Waiting for your gesture to start!</p>
+    </div>
 
     <script>
-        const video = document.getElementById('camera');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
+        // Check if video feed is loading
+        const videoFeed = document.getElementById('videoFeed');
+        const stats = document.getElementById('stats');
 
-        // Ask permission and start camera
-        async function startCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                console.log("Camera started successfully!");
-            } catch (err) {
-                document.getElementById('stats').innerText = "❌ Camera not accessible!";
-                console.error("Camera error:", err);
-            }
-        }
-        startCamera();
+        videoFeed.onload = function() {
+            stats.innerHTML = '<p style="color: #0f0;">✅ Video feed connected successfully!</p>';
+        };
 
-        // (Optional) Send frame to Flask for processing every few seconds
+        videoFeed.onerror = function() {
+            stats.innerHTML = '<p style="color: #f00;">❌ Error loading video feed. Check camera permissions!</p>';
+        };
+
+        // Optional: Add reconnection logic
         setInterval(() => {
-            const w = video.videoWidth;
-            const h = video.videoHeight;
-            if (w && h) {
-                canvas.width = w;
-                canvas.height = h;
-                ctx.drawImage(video, 0, 0, w, h);
-                canvas.toBlob(blob => {
-                    const formData = new FormData();
-                    formData.append("frame", blob, "frame.jpg");
-                    fetch("/process_frame", { method: "POST", body: formData });
-                }, "image/jpeg", 0.8);
+            if (videoFeed.complete && videoFeed.naturalHeight === 0) {
+                stats.innerHTML = '<p style="color: #ff0;">⚠️ Video feed lost. Reconnecting...</p>';
+                // Force reload by adding timestamp
+                const currentSrc = videoFeed.src.split('?')[0];
+                videoFeed.src = currentSrc + '?t=' + new Date().getTime();
             }
-        }, 2000); // every 2 seconds
+        }, 5000);
     </script>
 </body>
 </html>
